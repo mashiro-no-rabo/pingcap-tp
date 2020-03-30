@@ -3,8 +3,10 @@ use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
 #[structopt(
-  name = "kv",
-  version = env!("CARGO_PKG_VERSION")
+  name = env!("CARGO_PKG_NAME"),
+  version = env!("CARGO_PKG_VERSION"),
+  author = env!("CARGO_PKG_AUTHORS"),
+  about = env!("CARGO_PKG_DESCRIPTION"),
 )]
 enum Kv {
   Get { key: String },
