@@ -1,7 +1,19 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
+pub struct KvStore {}
+
+impl KvStore {
+  pub fn new() -> Self {
+    Self {}
+  }
+
+  pub fn get(&self, key: String) -> Option<String> {
+    unimplemented!()
+  }
+
+  pub fn set(&mut self, key: String, val: String) {
+    unimplemented!()
+  }
+
+  pub fn remove(&mut self, key: String) {
+    unimplemented!()
+  }
 }
