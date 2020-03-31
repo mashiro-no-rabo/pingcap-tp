@@ -8,8 +8,10 @@ use thiserror::Error;
 
 /// Error kinds enum for KvStore operations
 #[derive(Debug, Error)]
+#[allow(missing_docs)] // descriptions are provided through macro
 pub enum KvStoreError {
-  //
+  #[error("I/O operation failed")]
+  IoError(#[from] std::io::Error),
 }
 
 /// Result wrapper for KvStore operations
