@@ -9,7 +9,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 structopt = "0.3"
 serde = "1.0"
-ron = "0.5"
+rmp-serde = "0.14"
 
 [dev-dependencies]
 assert_cmd = "1.0"

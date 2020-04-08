@@ -2,11 +2,13 @@
 
 //! A library for in-memory key-value store
 
+use rmp_serde::decode::{Deserializer, ReadReader};
+use rmp_serde::encode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{prelude::*, BufReader};
-use std::path::{Path, PathBuf};
+use std::io::{BufReader, Seek, SeekFrom, Write};
+use std::path::PathBuf;
 use thiserror::Error;
 
 /// Error kinds enum for KvStore operations
@@ -18,20 +20,22 @@ pub enum KvStoreError {
   #[error("Replay existing log file failed: {0}")]
   ReplayError(String),
   #[error("Serializing command failed")]
-  SerError(#[from] ron::ser::Error),
+  EncodeError(#[from] rmp_serde::encode::Error),
   #[error("Deserializing command failed")]
-  DeError(#[from] ron::de::Error),
-  #[error("Key not found during remove")]
+  DecodeError(#[from] rmp_serde::decode::Error),
+  #[error("Key not found when attempting remove")]
   RmKeyNotFoundError,
+  #[error("Error when attempting get")]
+  GetError,
 }
 
 /// Result wrapper for KvStore operations
 pub type Result<T> = std::result::Result<T, KvStoreError>;
 
-// the in-memory index type
-type Index = HashMap<String, String>;
+// the in-memory index type (key -> log pointer)
+type Index = HashMap<String, u64>;
 // the log type
-type Log = File;
+type Log = Deserializer<ReadReader<BufReader<File>>>;
 
 /// KvStore is an in-memory key-value store
 pub struct KvStore {
@@ -49,31 +53,67 @@ enum KvCommand {
 
 impl KvStore {
   /// Creates a new key-value store
-  pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
-    let log_path = path.into().join("kvs.log");
-    let index = Self::replay(&log_path)?;
-    let log = OpenOptions::new()
-      .append(true)
-      .read(true)
-      .create(true)
-      .open(&log_path)?;
+  pub fn open(directory: impl Into<PathBuf>) -> Result<Self> {
+    let log_path = directory.into().join("kvs.log");
+
+    let log_file = OpenOptions::new().write(true).read(true).create(true).open(&log_path)?;
+
+    let reader = BufReader::new(log_file);
+    let mut log = Deserializer::new(reader);
+
+    let mut index = HashMap::new();
+    log.get_mut().seek(SeekFrom::Start(0))?;
+
+    loop {
+      let pos = log.get_mut().seek(SeekFrom::Current(0))?;
+      if let Ok(cmd) = KvCommand::deserialize(&mut log) {
+        match cmd {
+          KvCommand::Set(key, _value) => {
+            index.insert(key, pos);
+          }
+          KvCommand::Rm(key) => {
+            index.remove(&key);
+          }
+        }
+      } else {
+        // TODO check for EoF and error out otherwise
+        break;
+      }
+    }
 
     Ok(Self { index, log })
   }
 
   /// Get the value associated with the given key in the key-value store
-  pub fn get(&self, key: String) -> Result<Option<String>> {
-    Ok(self.index.get(&key).map(|s| s.to_owned()))
+  pub fn get(&mut self, key: String) -> Result<Option<String>> {
+    self
+      .index
+      .get(&key)
+      .map(|v| *v) //
+      .map(|log_pointer| {
+        self.log.get_mut().seek(SeekFrom::Start(log_pointer))?;
+
+        if let Ok(KvCommand::Set(key_in_log, value)) = KvCommand::deserialize(&mut self.log) {
+          if key_in_log == key {
+            Ok(value)
+          } else {
+            Err(KvStoreError::GetError)
+          }
+        } else {
+          Err(KvStoreError::GetError)
+        }
+      })
+      .transpose()
   }
 
   /// Set the value associated with the given key in the key-value store
   pub fn set(&mut self, key: String, value: String) -> Result<()> {
     // write log
-    let cmd = KvCommand::Set(key.clone(), value.clone());
-    write!(self.log, "{}\n", ron::ser::to_string(&cmd)?)?;
+    let cmd = KvCommand::Set(key.clone(), value);
+    let log_pointer = self.write_log(cmd)?;
 
     // update in-memory index
-    self.index.insert(key, value);
+    self.index.insert(key, log_pointer);
 
     Ok(())
   }
@@ -87,7 +127,7 @@ impl KvStore {
 
     // write log
     let cmd = KvCommand::Rm(key.clone());
-    write!(self.log, "{}\n", ron::ser::to_string(&cmd)?)?;
+    self.write_log(cmd)?;
 
     // update in-memory index
     self.index.remove(&key);
@@ -95,33 +135,14 @@ impl KvStore {
     Ok(())
   }
 
-  fn replay<P: AsRef<Path>>(path: P) -> Result<Index> {
-    let mut index = Index::new();
+  fn write_log(&mut self, cmd: KvCommand) -> Result<u64> {
+    // Go to file tail
+    let pos = self.log.get_mut().seek(SeekFrom::End(0))?;
 
-    match File::open(path) {
-      Ok(f) => {
-        let reader = BufReader::new(f);
-        for cmd_string in reader.lines().map(|l| l.unwrap()) {
-          let cmd = ron::de::from_str(&cmd_string)?;
-          match cmd {
-            KvCommand::Set(key, value) => {
-              index.insert(key, value);
-            }
-            KvCommand::Rm(key) => {
-              index.remove(&key);
-            }
-          }
-        }
+    // Write command
+    let bytes = encode::to_vec(&cmd)?;
+    self.log.get_mut().get_mut().write_all(&bytes)?;
 
-        Ok(index)
-      }
-      Err(e) => {
-        if e.kind() == std::io::ErrorKind::NotFound {
-          Ok(index)
-        } else {
-          Err(KvStoreError::IoError(e))
-        }
-      }
-    }
+    Ok(pos)
   }
 }

@@ -17,7 +17,7 @@ enum Kv {
 fn main() -> Result<()> {
   match Kv::from_args() {
     Kv::Get { key } => {
-      let store = KvStore::open(".")?;
+      let mut store = KvStore::open(".")?;
       match store.get(key)? {
         Some(vv) => println!("{}", vv),
         None => println!("Key not found"),
