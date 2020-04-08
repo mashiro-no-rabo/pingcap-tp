@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Direction {
@@ -15,6 +15,14 @@ enum Direction {
 struct Move {
   dir: Direction,
   dist: i32,
+}
+
+type Key = String;
+type Value = String;
+#[derive(Debug, Serialize, Deserialize)]
+enum KvCommand {
+  Set(Key, Value),
+  Rm(Key),
 }
 
 fn main() -> Result<()> {
@@ -63,6 +71,23 @@ fn main() -> Result<()> {
   let doc = bson::decode_document(&mut Cursor::new(&buf[..]))?;
   for m in doc.get_array("moves")?.iter().take(3) {
     println!("[exercise3] move: {:?}", m);
+  }
+
+  let mut buf = Vec::<u8>::new();
+  for x in 1..=10 {
+    let cmd = KvCommand::Set(format!("key{}", x), format!("value{}", 1000 - x));
+    buf.write_all(&rmp_serde::encode::to_vec(&cmd)?)?;
+  }
+
+  let mut de = rmp_serde::decode::Deserializer::new(Cursor::new(&buf[..]));
+
+  loop {
+    let pos = de.position();
+    if let Ok(cmd) = KvCommand::deserialize(&mut de) {
+      println!("{} {:?}", pos, cmd);
+    } else {
+      break;
+    }
   }
 
   Ok(())
