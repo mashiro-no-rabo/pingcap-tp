@@ -6,7 +6,7 @@ use rmp_serde::decode::{Deserializer, ReadReader};
 use rmp_serde::encode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use thiserror::Error;
@@ -27,6 +27,8 @@ pub enum KvStoreError {
   RmKeyNotFoundError,
   #[error("Error when attempting get")]
   GetError,
+  #[error("Error during compaction")]
+  CompactionError,
 }
 
 /// Result wrapper for KvStore operations
@@ -40,8 +42,13 @@ type Log = Deserializer<ReadReader<BufReader<File>>>;
 /// KvStore is an in-memory key-value store
 pub struct KvStore {
   index: Index,
+  log_dir: PathBuf,
   log: Log,
+  garbage: u32,
 }
+
+// Trigger compaction when garbages exceeding this value
+const COMPACTION_THRESHOLD: u32 = 100;
 
 type Key = String;
 type Value = String;
@@ -54,7 +61,8 @@ enum KvCommand {
 impl KvStore {
   /// Creates a new key-value store
   pub fn open(directory: impl Into<PathBuf>) -> Result<Self> {
-    let log_path = directory.into().join("kvs.log");
+    let log_dir = directory.into();
+    let log_path = log_dir.clone().join("kvs.log");
 
     let log_file = OpenOptions::new().write(true).read(true).create(true).open(&log_path)?;
 
@@ -62,6 +70,7 @@ impl KvStore {
     let mut log = Deserializer::new(reader);
 
     let mut index = HashMap::new();
+    let mut garbage = 0;
     log.get_mut().seek(SeekFrom::Start(0))?;
 
     loop {
@@ -69,10 +78,15 @@ impl KvStore {
       if let Ok(cmd) = KvCommand::deserialize(&mut log) {
         match cmd {
           KvCommand::Set(key, _value) => {
-            index.insert(key, pos);
+            if index.insert(key, pos).is_some() {
+              // key is replaced
+              garbage += 1;
+            }
           }
           KvCommand::Rm(key) => {
             index.remove(&key);
+            // rm is always garbage
+            garbage += 1;
           }
         }
       } else {
@@ -81,7 +95,15 @@ impl KvStore {
       }
     }
 
-    Ok(Self { index, log })
+    let mut kvs = Self {
+      index,
+      log_dir,
+      log,
+      garbage,
+    };
+    kvs.maybe_compact_logs()?;
+
+    Ok(kvs)
   }
 
   /// Get the value associated with the given key in the key-value store
@@ -113,7 +135,10 @@ impl KvStore {
     let log_pointer = self.write_log(cmd)?;
 
     // update in-memory index
-    self.index.insert(key, log_pointer);
+    if self.index.insert(key, log_pointer).is_some() {
+      self.garbage += 1;
+      self.maybe_compact_logs()?;
+    }
 
     Ok(())
   }
@@ -131,6 +156,8 @@ impl KvStore {
 
     // update in-memory index
     self.index.remove(&key);
+    self.garbage += 1;
+    self.maybe_compact_logs()?;
 
     Ok(())
   }
@@ -144,5 +171,53 @@ impl KvStore {
     self.log.get_mut().get_mut().write_all(&bytes)?;
 
     Ok(pos)
+  }
+
+  fn maybe_compact_logs(&mut self) -> Result<()> {
+    if self.garbage < COMPACTION_THRESHOLD {
+      return Ok(());
+    }
+
+    // write a new log with only Set commands
+    let clog_path = self.log_dir.clone().join("kvs-comp.log");
+
+    // use a block to close new file (?)
+    let new_index = {
+      let mut clog_file = OpenOptions::new().write(true).create(true).open(&clog_path)?;
+
+      let mut new_pos = 0;
+      let mut index = self.index.clone();
+      for (key, log_pointer) in index.iter_mut() {
+        self.log.get_mut().seek(SeekFrom::Start(*log_pointer))?;
+
+        if let Ok(KvCommand::Set(_, value)) = KvCommand::deserialize(&mut self.log) {
+          *log_pointer = new_pos;
+
+          let cmd = KvCommand::Set(key.to_owned(), value);
+          let bytes = encode::to_vec(&cmd)?;
+          clog_file.write_all(&bytes)?;
+          new_pos += bytes.len() as u64;
+        } else {
+          return Err(KvStoreError::CompactionError);
+        }
+      }
+      clog_file.sync_all()?;
+
+      index
+    };
+
+    // move (rename) the log and reopen it
+    let log_path = self.log_dir.clone().join("kvs.log");
+    fs::rename(clog_path, &log_path)?;
+    let log_file = OpenOptions::new().write(true).read(true).open(&log_path)?;
+    let reader = BufReader::new(log_file);
+    let new_log = Deserializer::new(reader);
+
+    // reset struct fields
+    self.index = new_index;
+    self.log = new_log;
+    self.garbage = 0;
+
+    Ok(())
   }
 }
