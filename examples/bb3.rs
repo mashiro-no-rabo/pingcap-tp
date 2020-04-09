@@ -39,6 +39,8 @@ fn main() -> Result<()> {
   match Command::from_args() {
     Command::Client => {
       let stream = TcpStream::connect("127.0.0.1:6379").context("Cannot connect")?;
+      stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+      stream.set_write_timeout(Some(Duration::from_secs(10)))?;
       let mut reader = BufReader::new(stream);
 
       loop {
@@ -81,6 +83,8 @@ fn main() -> Result<()> {
 }
 
 fn server_loop(stream: TcpStream) -> Result<()> {
+  stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+  stream.set_write_timeout(Some(Duration::from_secs(10)))?;
   let mut reader = BufReader::new(stream);
 
   loop {
