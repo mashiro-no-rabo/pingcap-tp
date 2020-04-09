@@ -51,19 +51,19 @@ fn main() -> Result<()> {
         println!("sent PING");
 
         // read Simple String type "+"
-        expect_one(reader.get_mut(), b'+', "Received non-Simple String reply")?;
+        expect_one(&mut reader, b'+', "Received non-Simple String reply")?;
 
         // read "PONG"
         let mut buf = [0; 4];
         const PONG: &[u8; 4] = b"PONG";
-        reader.get_mut().read_exact(&mut buf)?;
+        reader.read_exact(&mut buf)?;
         for i in 0..4 {
           if buf[i] != PONG[i] {
             bail!("Received non-PONG reply");
           }
         }
 
-        expect_end(reader.get_mut(), "reply protocol")?;
+        expect_end(&mut reader, "reply protocol")?;
 
         println!("recv PONG");
 
