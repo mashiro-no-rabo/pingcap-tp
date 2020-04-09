@@ -91,33 +91,29 @@ fn server_loop(stream: TcpStream) -> Result<()> {
     // always expect PING command here
 
     // read Array type "*"
-    expect_one(reader.get_mut(), b'*', "Received non-Array command")?;
+    expect_one(&mut reader, b'*', "Received non-Array command")?;
 
     // read Array len
     expect_len(&mut reader, 1, "Array")?;
 
-    println!("what?");
-
     // consume Bulk String type "$"
-    expect_one(reader.get_mut(), b'$', "Command Array does not include Bulk String")?; // this doesn't work??
-
-    println!("yes?");
+    expect_one(&mut reader, b'$', "Command Array does not include Bulk String")?; // this doesn't work??
 
     expect_len(&mut reader, 4, "Bulk String")?;
 
     // read "PING"
-    let mut buf = [0; 4];
     const PING: &[u8; 4] = b"PING";
-    reader.get_mut().read_exact(&mut buf)?;
+    let mut buf = [0; 4];
+    reader.read_exact(&mut buf)?;
     for i in 0..4 {
       if buf[i] != PING[i] {
         bail!("Received non-PING command");
       }
     }
 
-    expect_end(reader.get_mut(), "Bulk String")?;
+    expect_end(&mut reader, "Bulk String")?;
 
-    expect_end(reader.get_mut(), "command protocol")?;
+    expect_end(&mut reader, "command protocol")?;
 
     // Good PING command!
     println!("recv PING");
@@ -133,7 +129,6 @@ fn server_loop(stream: TcpStream) -> Result<()> {
 fn expect_one(reader: &mut impl Read, expect: u8, error_msg: &'static str) -> Result<()> {
   let mut buf = [0; 1];
   reader.read_exact(&mut buf)?;
-  dbg!(&buf);
   if buf[0] != expect {
     bail!(error_msg);
   }
