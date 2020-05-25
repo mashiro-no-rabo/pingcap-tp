@@ -30,14 +30,14 @@ use structopt::StructOpt;
 
 #[derive(StructOpt)]
 #[structopt(name = "bb3")]
-enum Command {
+enum RunAs {
   Client,
   Server,
 }
 
 fn main() -> Result<()> {
-  match Command::from_args() {
-    Command::Client => {
+  match RunAs::from_args() {
+    RunAs::Client => {
       let stream = TcpStream::connect("127.0.0.1:6379").context("Cannot connect")?;
       stream.set_read_timeout(Some(Duration::from_secs(10)))?;
       stream.set_write_timeout(Some(Duration::from_secs(10)))?;
@@ -70,7 +70,7 @@ fn main() -> Result<()> {
         sleep(Duration::from_secs(2));
       }
     }
-    Command::Server => {
+    RunAs::Server => {
       let listener = TcpListener::bind("127.0.0.1:6379").context("Cannot bind")?;
 
       for stream in listener.incoming() {
